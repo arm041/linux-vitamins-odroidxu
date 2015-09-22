@@ -1,0 +1,156 @@
+[Installation manual for Odroid-xu3]
+--------------------------------------------------------------------------------
+[odroid-xu3] 
+Read Official docuemnt and files first:
+http://odroid.com/dokuwiki/doku.php?id=en:odroid-xu3#kernels
+http://com.odroid.com/sigong/nf_file_board/nfile_board_view.php?keyword=&tag=&bid=236
+
+1. Compiling Linux/Android:
+	Environment Setup:
+	* Linux-3.10
+		- arm-eabi-gcc-4.6
+	* Android-4.4.2 alpha1
+		- java jre 1.6.0_38
+		- arm-eabi-gcc-4.6
+
+	[Linux Kernel v3.4]
+		https://github.com/hardkernel/linux/tree/odroidxu-3.4.y-android
+		
+		Option1: Make some modules builtin:
+		- from default config file:
+		  CONFIG_USB_NET_SMSC95XX=y
+		  CONFIG_SND_USB_AUDIO=y
+		  CONFIG_USB_NET_AX88179_178A=y
+		  CONFIG_RTL8192CU_SDK=y
+		
+		Option2: If the modules are not builtin:
+		find . -name *.ko -exec adb push '{}' /system/lib/modules/ \;
+		adb shell modprobe smsc95xx snd_usb_audio ax88179_178a
+		
+		source and compile:
+		git clone https://github.com/hardkernel/linux.git -b odroidxu3-3.10.y-android
+		cd linux
+		
+		make odroidxu3_defconfig
+		* script to do make:
+			#!/bin/bash
+			export ARCH=arm
+			export PATH=/opt/toolchains/arm-eabi-4.6/bin:$PATH
+			export CROSS_COMPILE="ccache arm-eabi-"
+			make -j8
+
+	[Android 4.4.2]
+		repo init -u https://github.com/hardkernel/android.git -b 5422_4.4.2_master
+		repo sync
+		repo start 5422_4.4.2_master --all
+		./build.sh odroidxu3
+		
+		[missing packages for ubuntu 14.04.1 LTS 64bit]
+		1. "error while loading shared libraries: libz.so.1 android"
+			sudo apt-get install lib32z1
+
+		[Install jdk 1.6.0_38]
+		* Install jdk 1.6.0_38 Use other version of jdk might lead to compile errors of Android-4.4.2
+		1. 
+		cd ~/Downloads
+		chmod +x ~/Downloads/jdk-6u38-linux-x64.bin
+		~/Downloads/./jdk-6u38-linux-x64.bin
+		sudo mkdir -p /usr/lib/jvm/jdk1.6.0
+		sudo mv ~/Downloads/jdk1.6.0_38/* -f /usr/lib/jvm/jdk1.6.0/
+	
+		2. Edit ~/.bashrc:	
+			export JAVA_HOME=/usr/lib/jvm/jdk1.6.0/bin
+			export PATH=$JAVA_HOME:$PATH
+
+2. Update Images:
+	1) Boot from micro sdcard
+		a. Use windows-based odroid image writer to write the image on micro sdcard
+		download image writer: http://com.odroid.com/sigong/blog/blog_list.php?bid=144
+		b. Insert micro sdcard, boot successully!
+	
+	2) First-time update with your own complied images
+	* linux
+		fastboot flash kernel arch/arm/boot/zImage-dtb
+	* Android
+		adb shell reboot fastboot
+		fastboot flash userdata out/target/product/odroidxu3/userdata.img
+		fastboot flash cache out/target/product/odroidxu3/cache.img
+		fastboot flash system out/target/product/odroidxu3/system.img
+		fastboot reboot
+
+	3)
+	[Update Kernel image]
+		adb shell reboot fastboot
+		fastboot flash kernel arch/arm/boot/zImage-dtb
+		fastboot reboot
+
+	[Update Android image]
+		adb shell reboot fastboot
+		fastboot flash userdata out/target/product/odroidxu3/userdata.img
+		fastboot flash userdata out/target/product/odroidxu3/cache.img
+		fastboot flash system out/target/product/odroidxu3/system.img
+		fastboot reboot
+
+	[Update android with update.zip]
+		1. Download update.zip from: http://dn.odroid.com/5422/ODROID-XU3/Android/4.4.2_Alpha_1.0_Aug-13-2014/
+		2. Download update.zip.md5sum from: http://dn.odroid.com/5422/ODROID-XU3/Android/4.4.2_Alpha_1.0_Aug-13-2014/
+		3. Copy the update.zip/md5sum to /sdcard/ on Android
+		4. Run ODROID-XU3 updater app
+		5. Validate file
+		6. Extract
+		7. Restart for update
+
+
+3. Android Tools
+[Fastboot] sudo apt-get install android-tools-fastboot
+
+4. Connect odroid with Linux host
+	1) USB Driver for host PC:
+		http://com.odroid.com/sigong/nf_file_board/nfile_board_view.php?bid=22
+	2) Permission problem: Add a rule to udev
+		http://odroid.com/dokuwiki/doku.php?id=en:odroid-xu3#kernels
+
+5. Other functions for Android
+--------------------------------------------------------------------------------
+	[Fake Wifi]
+	http://forum.odroid.com/viewtopic.php?f=78&t=5079#p42708
+		
+	You need "Xposed framework apk" and "Hack Connectivity Service apk"
+	
+	1.	Install "Xposed framework app"
+	2.	Run "Xposed Framework" and press "Frameowork" and reboot.
+	3.	Install "Hack connectivity app"
+	4.	Run "Xposed framework" and press "Module" and activate "Hack connectivity" (Check the check box)
+	5.	reboot
+	6.	Run "Hack connectivity" and Press "WiFi" button
+	
+	The Ethernet must be connected before starting above process.
+
+--------------------------------------------------------------------------------
+	[Google Services]
+	http://forum.odroid.com/viewtopic.php?f=51&t=40
+	http://codewalkerster.blogspot.kr/2013/09/odroid-xu-updatezip.html
+	
+	gapps services:
+	https://www.dropbox.com/s/f2ljl13kdpum2m0/GAppsInstaller.apk
+	
+	gapps:
+	http://wiki.cyanogenmod.org/w/Google_Apps#Downloads
+--------------------------------------------------------------------------------
+
+6. Troubleshooting
+	1) Boot form micro sdcard:
+		There is compatibility issue of type/class of micro sd cards.
+	2) Boot into fastboot mode (http://forum.odroid.com/viewtopic.php?f=7&t=921&view=unread)
+		"When you power on the board with the UART kit connected hit enter... 
+		You have 1.5 sec to do such."
+	3) Missing OpenCL library
+		http://forum.odroid.com/viewtopic.php?f=99&t=6653
+
+7. sysfs
+	* Mali sysfs files: /sys/class/misc/mali0/device
+	* Power sensors: INA231
+		 A7: /sys/bus/i2c/devices/4-0045
+		A15: /sys/bus/i2c/devices/4-0040
+		MEM: /sys/bus/i2c/devices/4-0041
+		GPU: /sys/bus/i2c/devices/4-0044
