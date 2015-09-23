@@ -298,6 +298,39 @@ __read_mostly int scheduler_running;
 int sysctl_sched_rt_runtime = 950000;
 
 
+#ifdef CONFIG_HAS_SENSING_HOOKS
+
+static void (*_task_created_hook)(int cpu, struct task_struct *tsk) = 0;
+static void (*_sensing_begin_hook)(int cpu, struct task_struct *tsk) = 0;
+static void (*_sensing_end_hook)(int cpu, struct task_struct *tsk, bool vcsw) = 0;
+static bool sensing_hooks_set;
+
+void setup_sensing_hooks(
+            void (*task_created_hook)(int cpu, struct task_struct *tsk),
+            void (*sensing_begin_hook)(int cpu, struct task_struct *tsk),
+            void (*sensing_end_hook)(int cpu, struct task_struct *tsk, bool vcsw))
+{
+    _task_created_hook = task_created_hook;
+    _sensing_begin_hook = sensing_begin_hook;
+    _sensing_end_hook = sensing_end_hook;
+    sensing_hooks_set = true;
+}
+
+static inline void call_task_created_hook(int cpu, struct task_struct *tsk)
+{
+    if(sensing_hooks_set) (*_task_created_hook)(cpu,tsk);
+}
+static inline void call_sensing_begin_hook(int cpu, struct task_struct *tsk)
+{
+    if(sensing_hooks_set && tsk->sensing_hook_enabled) (*_sensing_begin_hook)(cpu,tsk);
+}
+static inline void call_sensing_end_hook(int cpu, struct task_struct *tsk, bool vcsw)
+{
+    if(sensing_hooks_set && tsk->sensing_hook_enabled) (*_sensing_end_hook)(cpu,tsk,vcsw);
+}
+
+#endif
+
 
 /*
  * __task_rq_lock - lock the rq @p resides on.
@@ -1737,6 +1770,11 @@ void sched_fork(struct task_struct *p)
 	set_task_cpu(p, cpu);
 	raw_spin_unlock_irqrestore(&p->pi_lock, flags);
 
+#ifdef CONFIG_HAS_SENSING_HOOKS
+	//initializes task hook_data and pin to this cpu
+	call_task_created_hook(cpu,p);
+#endif
+
 #if defined(CONFIG_SCHEDSTATS) || defined(CONFIG_TASK_DELAY_ACCT)
 	if (likely(sched_info_on()))
 		memset(&p->sched_info, 0, sizeof(p->sched_info));
@@ -3015,6 +3053,10 @@ need_resched:
 		switch_count = &prev->nvcsw;
 	}
 
+#ifdef CONFIG_HAS_SENSING_HOOKS
+	call_sensing_end_hook(cpu,prev,(switch_count==&(prev->nvcsw)));
+#endif
+
 	pre_schedule(rq, prev);
 
 	if (unlikely(!rq->nr_running))
@@ -3048,6 +3090,11 @@ need_resched:
 	sched_preempt_enable_no_resched();
 	if (need_resched())
 		goto need_resched;
+
+#ifdef CONFIG_HAS_SENSING_HOOKS
+    call_sensing_begin_hook(cpu,rq->curr);
+#endif
+
 }
 
 static inline void sched_submit_work(struct task_struct *tsk)
@@ -7112,6 +7159,11 @@ void __init sched_init(void)
 	idle_thread_set_boot_cpu();
 #endif
 	init_sched_fair_class();
+
+#ifdef CONFIG_HAS_SENSING_HOOKS
+	printk(KERN_INFO "sched_init(): sensing hooks allowed\n");
+	sensing_hooks_set = false;
+#endif
 
 	scheduler_running = 1;
 }
