@@ -301,13 +301,13 @@ int sysctl_sched_rt_runtime = 950000;
 #ifdef CONFIG_HAS_SENSING_HOOKS
 
 static void (*_task_created_hook)(int cpu, struct task_struct *tsk) = 0;
-static void (*_sensing_begin_hook)(int cpu, struct task_struct *tsk) = 0;
+static void (*_sensing_begin_hook)(int cpu, struct task_struct *tsk,int64_t time_given) = 0;
 static void (*_sensing_end_hook)(int cpu, struct task_struct *tsk, bool vcsw) = 0;
 static volatile bool sensing_hooks_set;
 
 void setup_sensing_hooks(
             void (*task_created_hook)(int cpu, struct task_struct *tsk),
-            void (*sensing_begin_hook)(int cpu, struct task_struct *tsk),
+            void (*sensing_begin_hook)(int cpu, struct task_struct *tsk,int64_t time_given),
             void (*sensing_end_hook)(int cpu, struct task_struct *tsk, bool vcsw))
 {
     _task_created_hook = task_created_hook;
@@ -332,7 +332,7 @@ static inline void call_task_created_hook(int cpu, struct task_struct *tsk)
 }
 static inline void call_sensing_begin_hook(int cpu, struct task_struct *tsk)
 {
-    if(sensing_hooks_set && tsk->sensing_hook_enabled) (*_sensing_begin_hook)(cpu,tsk);
+    if(sensing_hooks_set && tsk->sensing_hook_enabled) (*_sensing_begin_hook)(cpu,tsk,(tsk->sched_class->get_rr_interval)(cpu_rq(cpu),tsk));
 }
 static inline void call_sensing_end_hook(int cpu, struct task_struct *tsk, bool vcsw)
 {
