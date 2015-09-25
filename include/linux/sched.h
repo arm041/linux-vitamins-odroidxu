@@ -1454,10 +1454,11 @@ struct task_struct {
 };
 
 #ifdef CONFIG_HAS_SENSING_HOOKS
-void setup_sensing_hooks(
+extern void setup_sensing_hooks(
             void (*task_created_hook)(int cpu, struct task_struct *tsk),
             void (*sensing_begin_hook)(int cpu, struct task_struct *tsk),
             void (*sensing_end_hook)(int cpu, struct task_struct *tsk,bool vcsw));
+extern void remove_sensing_hooks(void);
 #endif
 
 

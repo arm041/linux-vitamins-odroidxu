@@ -303,7 +303,7 @@ int sysctl_sched_rt_runtime = 950000;
 static void (*_task_created_hook)(int cpu, struct task_struct *tsk) = 0;
 static void (*_sensing_begin_hook)(int cpu, struct task_struct *tsk) = 0;
 static void (*_sensing_end_hook)(int cpu, struct task_struct *tsk, bool vcsw) = 0;
-static bool sensing_hooks_set;
+static volatile bool sensing_hooks_set;
 
 void setup_sensing_hooks(
             void (*task_created_hook)(int cpu, struct task_struct *tsk),
@@ -313,8 +313,18 @@ void setup_sensing_hooks(
     _task_created_hook = task_created_hook;
     _sensing_begin_hook = sensing_begin_hook;
     _sensing_end_hook = sensing_end_hook;
+    smp_mb();
     sensing_hooks_set = true;
+    smp_mb();
 }
+EXPORT_SYMBOL(setup_sensing_hooks);
+
+void remove_sensing_hooks(void)
+{
+    sensing_hooks_set = false;
+    smp_mb();
+}
+EXPORT_SYMBOL(remove_sensing_hooks);
 
 static inline void call_task_created_hook(int cpu, struct task_struct *tsk)
 {
