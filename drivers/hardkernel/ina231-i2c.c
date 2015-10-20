@@ -16,6 +16,13 @@
 //[*]--------------------------------------------------------------------------------------------------[*]
 #include "ina231-misc.h"
 #include "ina231-sysfs.h"
+#ifdef CONFIG_CLOVERTRACE
+#include "../staging/clovertrace/clovertrace.h"
+#else
+#define CLOVERTRACE_TIMESTAMP(...)
+#endif
+
+static spinlock_t spinlock;
 
 //#define DEBUG_INA231
 //[*]--------------------------------------------------------------------------------------------------[*]
@@ -114,6 +121,148 @@ int 	ina231_i2c_write(struct i2c_client *client, unsigned char cmd, unsigned sho
 	return ret;
 }
 
+
+// roger
+int g_rthread_tid = -1;
+int g_rthread_migration = 0;
+int g_rthread_migration_b2l = 0;
+int g_rthread_migration_l2b = 0;
+
+static struct ina231_sensor *g_sensor[4];
+static ktime_t g_start_time;
+static int s_eff_frame_count, s_frame_count, s_sf_frame_count;
+
+extern int gGetDVFSUtilCnt;
+extern u32 g_profile_cpu_idle;
+extern u32 g_profile_gpu_idle;
+/*
+ * TODO in roger's code, these globals are externals defined somewhere elese (e.g. user space governor)
+ * do I the definitions in the original places or just having them as static here works for me ???
+ */
+static int gDVFSProcCnt;
+static int g_frame_count, g_eff_frame_count, g_sf_frame_count;
+static int g_bus_mif_util, g_bus_mif_util_cnt;
+static int g_bus_int_util, g_bus_int_util_cnt;
+
+void ina231_i2c_enable_all(void)
+{
+	int i;
+
+	g_sf_frame_count = g_eff_frame_count = g_frame_count = 0;
+	g_rthread_migration = g_rthread_migration_b2l = g_rthread_migration_l2b = 0;
+	g_profile_cpu_idle = g_profile_gpu_idle = 0;
+	g_bus_mif_util = g_bus_mif_util_cnt = 0;
+	g_bus_int_util = g_bus_int_util_cnt = 0;
+	g_start_time = ktime_get();
+	for (i = 0; i < 4; ++i) {
+		g_sensor[i]->pd->enable = 1;
+		g_sensor[i]->pd->pwrm.count = 0;	// roger
+		g_sensor[i]->pd->pwrm.sum_power = 0;	// roger
+//		g_sensor[i]->pd->pwrm.start_time = now;
+		ina231_i2c_enable(g_sensor[i]);
+	}
+
+	gDVFSProcCnt = 0;
+}
+EXPORT_SYMBOL(ina231_i2c_enable_all);
+
+void ina231_i2c_disable_all(void)
+{
+	int i;
+	ktime_t now = ktime_get();
+	s64 elapsed_time;
+
+	elapsed_time = ktime_to_us(ktime_sub(now, g_start_time));
+	s_frame_count = g_frame_count;
+	s_eff_frame_count = g_eff_frame_count;
+	s_sf_frame_count = g_sf_frame_count;
+	for (i = 0; i < 4; ++i) {
+		g_sensor[i]->pd->enable = 0;
+	    g_sensor[i]->pd->pwrm.elapsed_time = elapsed_time;
+	}
+}
+EXPORT_SYMBOL(ina231_i2c_disable_all);
+
+
+void ina231_i2c_dump_all(void)
+{
+	int i;
+	u32 elapsed_time_ms = g_sensor[0]->pd->pwrm.elapsed_time;
+	u32 count = g_sensor[0]->pd->pwrm.count;
+	u32 total_power = 0;
+	char buf[256];
+	char *ptr;
+
+	int fps_int, fps_frac;
+	int p_a15_int, p_a15_frac, p_a7_int, p_a7_frac, p_gpu_int, p_gpu_frac, p_mem_int, p_mem_frac;
+
+	elapsed_time_ms = elapsed_time_ms / 1000;
+
+	fps_int = s_frame_count * 1000 / elapsed_time_ms;
+	fps_frac = ((s_frame_count * 1000 % elapsed_time_ms) * 100) / elapsed_time_ms;
+	printk("DS: fr=(%4d/%4d) fps=(%2d.%d / %2d.%d / %2d.%d), migration = %d,%d,%d, time = %u.%u sec\n",
+			s_frame_count, s_eff_frame_count,
+			fps_int, fps_frac,
+			s_eff_frame_count * 1000 / elapsed_time_ms, ((s_eff_frame_count * 1000 % elapsed_time_ms) * 100) / elapsed_time_ms,
+			s_sf_frame_count * 1000 / elapsed_time_ms, ((s_sf_frame_count * 1000 % elapsed_time_ms) * 100) / elapsed_time_ms,
+			g_rthread_migration, g_rthread_migration_b2l, g_rthread_migration_l2b,
+			elapsed_time_ms / 1000, elapsed_time_ms % 1000);
+	printk("DS: %11s %7s %7s %7s %7s\n", "", "A15", "A7", "GPU", "Mem");
+	ptr = &buf[0];
+	for (i = 0; i < 4; ++i) {
+		u32 avg_pwr_int;
+		u32 avg_pwr_frac;
+
+		g_sensor[i]->pd->pwrm.sum_power /= 1000; // turn uW to mW
+		avg_pwr_int = g_sensor[i]->pd->pwrm.sum_power / count;
+		avg_pwr_frac = (g_sensor[i]->pd->pwrm.sum_power % count) * 100 / count;
+
+		ptr += sprintf(ptr, "%4u.%u ", avg_pwr_int, avg_pwr_frac);
+//		printk("DS:%11s: %11d %8lld\n",
+//				g_sensor[i]->pd->name,
+//				g_sensor[i]->pd->pwrm.sum_power / g_sensor[i]->pd->pwrm.count,
+//				g_sensor[i]->pd->pwrm.elapsed_time);
+		total_power += g_sensor[i]->pd->pwrm.sum_power;
+
+		switch (i) {
+		case 0:
+			p_a15_int = avg_pwr_int;
+			p_a15_frac = avg_pwr_frac;
+			break;
+		case 1:
+			p_a7_int = avg_pwr_int;
+			p_a7_frac = avg_pwr_frac;
+			break;
+		case 2:
+			p_gpu_int = avg_pwr_int;
+			p_gpu_frac = avg_pwr_frac;
+			break;
+		case 3:
+			p_mem_int = avg_pwr_int;
+			p_mem_frac = avg_pwr_frac;
+			break;
+		default:
+			break;
+		}
+	}
+	printk("DS: %11s %s\n", "Avg Pwr(mW)", buf);
+	printk("DS: %11s %4u.%u mW\n", "Avg Power", total_power / count, total_power % count * 100 / count);
+	printk("DS: Avg mem util: mif=%u, int=%u\n", g_bus_mif_util / g_bus_mif_util_cnt, g_bus_int_util / g_bus_int_util_cnt);
+	printk("DS: REG %d.%d %d.%d %d.%d %d.%d %d.%d %d.%d %d %d %d %d\n",
+			fps_int, fps_frac,
+			total_power / count, total_power % count * 100 / count,
+			p_a15_int, p_a15_frac,
+			p_a7_int, p_a7_frac,
+			p_gpu_int, p_gpu_frac,
+			p_mem_int, p_mem_frac,
+			(g_bus_mif_util / g_bus_mif_util_cnt),
+			(g_bus_int_util / g_bus_int_util_cnt),
+			g_profile_cpu_idle,
+			g_profile_gpu_idle);
+	printk("DS: c_idle,g_idle= %6d,%6d\n", g_profile_cpu_idle, g_profile_gpu_idle);
+//	printk("DS: cnt1 = %d\n", gDVFSProcCnt);
+}
+
 //[*]--------------------------------------------------------------------------------------------------[*]
 void    ina231_i2c_enable(struct ina231_sensor *sensor)
 {
@@ -138,11 +287,54 @@ static 	void 	ina231_work		(struct work_struct *work)
             sensor->max_uV = sensor->cur_uV;    sensor->max_uA = sensor->cur_uA;    sensor->max_uW = sensor->cur_uW;
         }
     	mutex_unlock(&sensor->mutex);
+
+    	sensor->pd->pwrm.count++;	// roger
+        sensor->pd->pwrm.sum_power += sensor->cur_uW;	// roger
+#if 1
+        {
+        	// TODO: might have race condition
+        	static int i = 0;
+        	static int w = 0;
+
+        	spin_lock(&spinlock);
+        	w += sensor->cur_uW / 1000;
+        	i++;
+        	if (i == 4) {
+        		CLOVERTRACE_TIMESTAMP(USER_GRAPH_ID, 5, w);
+        		i = 0;
+        		w = 0;
+        	}
+        	spin_unlock(&spinlock);
+        }
+#else
+        {
+        	int w;
+        w += sensor->cur_uW / 1000;
+    	spin_lock(&spinlock);
+        if (strcmp(sensor->pd->name, "sensor_kfc") == 0) {
+        		CLOVERTRACE_TIMESTAMP(USER_GRAPH_ID, 0, w);
+        } else if (strcmp(sensor->pd->name, "sensor_arm") == 0) {
+    		CLOVERTRACE_TIMESTAMP(USER_GRAPH_ID, 1, w);
+        } else if (strcmp(sensor->pd->name, "sensor_g3d") == 0) {
+    		CLOVERTRACE_TIMESTAMP(USER_GRAPH_ID, 2, w);
+        } else if (strcmp(sensor->pd->name, "sensor_mem") == 0) {
+    		CLOVERTRACE_TIMESTAMP(USER_GRAPH_ID, 3, w);
+        }
+    	spin_unlock(&spinlock);
+        }
+#endif
+
     }
     else    {
         sensor->cur_uV = 0; sensor->cur_uA = 0; sensor->cur_uW = 0;
     }
     
+
+//    printk("DS: pwr=%4d mW, 0x%04X 0x%04X\n",
+//    		sensor->cur_uW / 1000,
+//			ina231_i2c_read(sensor->client, REG_ALERT_EN),
+//			ina231_i2c_read(sensor->client, REG_CONFIG));
+//    printk("DS: pwr=%4d uW\n", sensor->cur_uW);
 #if defined(DEBUG_INA231)
     printk("%s : BUS Voltage = %06d uV, %1d.%06d V\n", sensor->pd->name, sensor->cur_uV, sensor->cur_uV/1000000, sensor->cur_uV%1000000);
     printk("%s : Curent      = %06d uA, %1d.%06d A\n", sensor->pd->name, sensor->cur_uA, sensor->cur_uA/1000000, sensor->cur_uA%1000000);
@@ -189,9 +381,21 @@ static int  ina231_i2c_dt_parse(struct i2c_client *client, struct ina231_sensor 
 	
 	if (of_property_read_u32(sensor_np, "config", &rdata))                  return  -1;
 	sensor->pd->config = rdata;
+
+	/* 0x45FB: 0100 0101 1111 1011
+	 *  RST: 0100: none
+	 *  AVG:  010: 16 times
+	 * Vbus:  111: 8.244 ms
+	 *  Vsh:  111: 8.244 ms
+	 * Mode:  011: shunt, bus, triggered
+	*/
+	sensor->pd->config = 0x45FF;	// roger
+//	sensor->pd->config = 0x45FB;	// roger
 	
 	if (of_property_read_u32(sensor_np, "update_period", &rdata))           return  -1;
-	sensor->pd->update_period = rdata;
+//	sensor->pd->update_period = rdata;
+	sensor->pd->update_period = 125000;//131904; // roger: overhead exists so set to higher frequency
+//	sensor->pd->update_period = 10000;//131904; // roger: overhead exists so set to higher frequency
 
     return  0;
 }
@@ -213,6 +417,7 @@ static int 	ina231_i2c_probe(struct i2c_client *client, const struct i2c_device_
 		dev_err(&client->dev, "INA231 Sensor struct malloc error!\n");
 		return	-ENOMEM;
 	}
+
     // mutex init	
 	mutex_init(&sensor->mutex);
 
@@ -235,6 +440,7 @@ static int 	ina231_i2c_probe(struct i2c_client *client, const struct i2c_device_
     if((rc = ina231_i2c_write(sensor->client, REG_CONFIG,      sensor->pd->config))        < 0) goto out;
     if((rc = ina231_i2c_write(sensor->client, REG_CALIBRATION, sensor->reg_calibration))   < 0) goto out;
     if((rc = ina231_i2c_write(sensor->client, REG_ALERT_EN,    0x0000))  < 0)                   goto out;
+//    if((rc = ina231_i2c_write(sensor->client, REG_ALERT_EN,    0x0400))  < 0)                   goto out;	// roger
     if((rc = ina231_i2c_write(sensor->client, REG_ALERT_LIMIT, 0x0000))  < 0)                   goto out;
     
     if((rc = ina231_i2c_read(sensor->client, REG_CONFIG      )) != sensor->pd->config      )    goto out;
@@ -272,6 +478,16 @@ static int 	ina231_i2c_probe(struct i2c_client *client, const struct i2c_device_
     dev_info(&client->dev, "Conversion Time : %d us\n"  , sensor->pd->update_period );
     dev_info(&client->dev, "=====================================================\n");
     
+    // roger
+    if (0 == strcmp(sensor->pd->name + 7, "arm")) {
+    	g_sensor[0] = sensor;
+    } else if (0 == strcmp(sensor->pd->name + 7, "kfc")) {
+    	g_sensor[1] = sensor;
+    } else if (0 == strcmp(sensor->pd->name + 7, "g3d")) {
+    	g_sensor[2] = sensor;
+    } else if (0 == strcmp(sensor->pd->name + 7, "mem")) {
+    	g_sensor[3] = sensor;
+    }
     return  0;
 out:
     dev_err(&client->dev, "============= Probe INA231 Fail! : %s (0x%04X) ============= \n", sensor->pd->name, rc); 
@@ -318,6 +534,9 @@ static struct i2c_driver ina231_i2c_driver = {
 //[*]--------------------------------------------------------------------------------------------------[*]
 static int __init 	ina231_i2c_init(void)
 {
+	printk(KERN_INFO"ina231_i2c modified by Roger is being loaded!\n");
+    spin_lock_init(&spinlock);
+
 	return i2c_add_driver(&ina231_i2c_driver);
 }
 module_init(ina231_i2c_init);
@@ -325,6 +544,7 @@ module_init(ina231_i2c_init);
 //[*]--------------------------------------------------------------------------------------------------[*]
 static void __exit 	ina231_i2c_exit(void)
 {
+
 	i2c_del_driver(&ina231_i2c_driver);
 }
 module_exit(ina231_i2c_exit);

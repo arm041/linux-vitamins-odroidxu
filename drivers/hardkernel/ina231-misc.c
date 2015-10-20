@@ -48,6 +48,18 @@ static const struct file_operations 	ina231_misc_fops = {
 	.unlocked_ioctl	= ina231_misc_ioctl,
 };
 
+//extern int gDoCPUDVFS;
+//extern int gDoGPUDVFS;
+
+int g_cpugpu_dvfs_debug = 0;
+u32 g_profile_cpu_idle = 0;
+u32 g_profile_gpu_idle = 0;
+int gDoCPUDVFS = 0;
+int gDoGPUDVFS = 0;
+int g_mem_threshold = 30;
+u32 g_target_core = 4;
+int g_mem_bound_cpu_freq_idx = 4;
+
 //[*]--------------------------------------------------------------------------------------------------[*]
 static long 	ina231_misc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
@@ -116,7 +128,7 @@ int		ina231_misc_probe(struct ina231_sensor *sensor)
 	struct miscdevice       *pmisc;
 	struct global_sensor    *gsensor;
 	
-	if(!(pmisc = devm_kzalloc(&sensor->client->dev, sizeof(struct miscdevice), GFP_KERNEL)))	{
+	if(!(pmisc = kzalloc(sizeof(struct miscdevice), GFP_KERNEL)))	{
 		printk("INA231 Sensor misc struct malloc error!\n");
 		return	-ENOMEM;
 	}
@@ -131,7 +143,7 @@ int		ina231_misc_probe(struct ina231_sensor *sensor)
 		printk("%s : INA231 misc register fail!\n", __func__);		return	rc;
 	}
 
-    if(!(gsensor = (struct global_sensor *)devm_kzalloc(&sensor->client->dev, sizeof(struct global_sensor), GFP_KERNEL)))  {
+    if(!(gsensor = (struct global_sensor *)kmalloc(sizeof(struct global_sensor), GFP_KERNEL)))  {
         printk("%s : INA231 global sensor malloc error!\n", __func__);
     }
     else    {
@@ -154,7 +166,10 @@ void 	ina231_misc_remove(struct device *dev)
     list_for_each(list_head, &SensorList)
     {
         gsensor = list_entry(list_head, struct global_sensor, list);
+        
+        kfree(gsensor);
     }    
+    kfree(sensor->misc);
 }
 
 //[*]--------------------------------------------------------------------------------------------------[*]

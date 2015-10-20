@@ -132,6 +132,13 @@ struct ina231_pd    {
 	unsigned int    update_period;    // unit = usec
 
 	unsigned int    enable;
+
+	struct pwr_measure {
+		unsigned int	sum_power;
+		unsigned int	count;
+//		ktime_t	start_time;
+		s64 elapsed_time;
+	} pwrm;
 };
 
 //[*]--------------------------------------------------------------------------------------------------[*]
