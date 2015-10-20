@@ -129,42 +129,33 @@ int g_rthread_migration_b2l = 0;
 int g_rthread_migration_l2b = 0;
 
 static struct ina231_sensor *g_sensor[4];
-static ktime_t g_start_time;
-static int s_eff_frame_count, s_frame_count, s_sf_frame_count;
-
-extern int gGetDVFSUtilCnt;
-extern u32 g_profile_cpu_idle;
-extern u32 g_profile_gpu_idle;
-/*
- * TODO in roger's code, these globals are externals defined somewhere elese (e.g. user space governor)
- * do I the definitions in the original places or just having them as static here works for me ???
- */
-static int gDVFSProcCnt;
-static int g_frame_count, g_eff_frame_count, g_sf_frame_count;
-static int g_bus_mif_util, g_bus_mif_util_cnt;
-static int g_bus_int_util, g_bus_int_util_cnt;
+static ktime_t g_start_time[4];
 
 void ina231_i2c_enable_all(void)
 {
 	int i;
-
-	g_sf_frame_count = g_eff_frame_count = g_frame_count = 0;
-	g_rthread_migration = g_rthread_migration_b2l = g_rthread_migration_l2b = 0;
-	g_profile_cpu_idle = g_profile_gpu_idle = 0;
-	g_bus_mif_util = g_bus_mif_util_cnt = 0;
-	g_bus_int_util = g_bus_int_util_cnt = 0;
-	g_start_time = ktime_get();
+	g_start_time[0] = ktime_get();
 	for (i = 0; i < 4; ++i) {
+	    g_start_time[i] = g_start_time[0];
 		g_sensor[i]->pd->enable = 1;
 		g_sensor[i]->pd->pwrm.count = 0;	// roger
 		g_sensor[i]->pd->pwrm.sum_power = 0;	// roger
 //		g_sensor[i]->pd->pwrm.start_time = now;
 		ina231_i2c_enable(g_sensor[i]);
 	}
-
-	gDVFSProcCnt = 0;
 }
 EXPORT_SYMBOL(ina231_i2c_enable_all);
+
+void ina231_i2c_enable_sensor(int sensor_id)
+{
+    g_start_time[sensor_id] = g_start_time[0];
+    g_sensor[sensor_id]->pd->enable = 1;
+    g_sensor[sensor_id]->pd->pwrm.count = 0;    // roger
+    g_sensor[sensor_id]->pd->pwrm.sum_power = 0;    // roger
+    //      g_sensor[sensor_id]->pd->pwrm.start_time = now;
+    ina231_i2c_enable(g_sensor[sensor_id]);
+}
+EXPORT_SYMBOL(ina231_i2c_enable_sensor);
 
 void ina231_i2c_disable_all(void)
 {
@@ -172,10 +163,7 @@ void ina231_i2c_disable_all(void)
 	ktime_t now = ktime_get();
 	s64 elapsed_time;
 
-	elapsed_time = ktime_to_us(ktime_sub(now, g_start_time));
-	s_frame_count = g_frame_count;
-	s_eff_frame_count = g_eff_frame_count;
-	s_sf_frame_count = g_sf_frame_count;
+	elapsed_time = ktime_to_us(ktime_sub(now, g_start_time[0]));
 	for (i = 0; i < 4; ++i) {
 		g_sensor[i]->pd->enable = 0;
 	    g_sensor[i]->pd->pwrm.elapsed_time = elapsed_time;
@@ -183,85 +171,21 @@ void ina231_i2c_disable_all(void)
 }
 EXPORT_SYMBOL(ina231_i2c_disable_all);
 
-
-void ina231_i2c_dump_all(void)
+void ina231_i2c_disable_sensor(int sensor_id)
 {
-	int i;
-	u32 elapsed_time_ms = g_sensor[0]->pd->pwrm.elapsed_time;
-	u32 count = g_sensor[0]->pd->pwrm.count;
-	u32 total_power = 0;
-	char buf[256];
-	char *ptr;
-
-	int fps_int, fps_frac;
-	int p_a15_int, p_a15_frac, p_a7_int, p_a7_frac, p_gpu_int, p_gpu_frac, p_mem_int, p_mem_frac;
-
-	elapsed_time_ms = elapsed_time_ms / 1000;
-
-	fps_int = s_frame_count * 1000 / elapsed_time_ms;
-	fps_frac = ((s_frame_count * 1000 % elapsed_time_ms) * 100) / elapsed_time_ms;
-	printk("DS: fr=(%4d/%4d) fps=(%2d.%d / %2d.%d / %2d.%d), migration = %d,%d,%d, time = %u.%u sec\n",
-			s_frame_count, s_eff_frame_count,
-			fps_int, fps_frac,
-			s_eff_frame_count * 1000 / elapsed_time_ms, ((s_eff_frame_count * 1000 % elapsed_time_ms) * 100) / elapsed_time_ms,
-			s_sf_frame_count * 1000 / elapsed_time_ms, ((s_sf_frame_count * 1000 % elapsed_time_ms) * 100) / elapsed_time_ms,
-			g_rthread_migration, g_rthread_migration_b2l, g_rthread_migration_l2b,
-			elapsed_time_ms / 1000, elapsed_time_ms % 1000);
-	printk("DS: %11s %7s %7s %7s %7s\n", "", "A15", "A7", "GPU", "Mem");
-	ptr = &buf[0];
-	for (i = 0; i < 4; ++i) {
-		u32 avg_pwr_int;
-		u32 avg_pwr_frac;
-
-		g_sensor[i]->pd->pwrm.sum_power /= 1000; // turn uW to mW
-		avg_pwr_int = g_sensor[i]->pd->pwrm.sum_power / count;
-		avg_pwr_frac = (g_sensor[i]->pd->pwrm.sum_power % count) * 100 / count;
-
-		ptr += sprintf(ptr, "%4u.%u ", avg_pwr_int, avg_pwr_frac);
-//		printk("DS:%11s: %11d %8lld\n",
-//				g_sensor[i]->pd->name,
-//				g_sensor[i]->pd->pwrm.sum_power / g_sensor[i]->pd->pwrm.count,
-//				g_sensor[i]->pd->pwrm.elapsed_time);
-		total_power += g_sensor[i]->pd->pwrm.sum_power;
-
-		switch (i) {
-		case 0:
-			p_a15_int = avg_pwr_int;
-			p_a15_frac = avg_pwr_frac;
-			break;
-		case 1:
-			p_a7_int = avg_pwr_int;
-			p_a7_frac = avg_pwr_frac;
-			break;
-		case 2:
-			p_gpu_int = avg_pwr_int;
-			p_gpu_frac = avg_pwr_frac;
-			break;
-		case 3:
-			p_mem_int = avg_pwr_int;
-			p_mem_frac = avg_pwr_frac;
-			break;
-		default:
-			break;
-		}
-	}
-	printk("DS: %11s %s\n", "Avg Pwr(mW)", buf);
-	printk("DS: %11s %4u.%u mW\n", "Avg Power", total_power / count, total_power % count * 100 / count);
-	printk("DS: Avg mem util: mif=%u, int=%u\n", g_bus_mif_util / g_bus_mif_util_cnt, g_bus_int_util / g_bus_int_util_cnt);
-	printk("DS: REG %d.%d %d.%d %d.%d %d.%d %d.%d %d.%d %d %d %d %d\n",
-			fps_int, fps_frac,
-			total_power / count, total_power % count * 100 / count,
-			p_a15_int, p_a15_frac,
-			p_a7_int, p_a7_frac,
-			p_gpu_int, p_gpu_frac,
-			p_mem_int, p_mem_frac,
-			(g_bus_mif_util / g_bus_mif_util_cnt),
-			(g_bus_int_util / g_bus_int_util_cnt),
-			g_profile_cpu_idle,
-			g_profile_gpu_idle);
-	printk("DS: c_idle,g_idle= %6d,%6d\n", g_profile_cpu_idle, g_profile_gpu_idle);
-//	printk("DS: cnt1 = %d\n", gDVFSProcCnt);
+    ktime_t now = ktime_get();
+    s64 elapsed_time;
+    elapsed_time = ktime_to_us(ktime_sub(now, g_start_time[sensor_id]));
+    g_sensor[sensor_id]->pd->enable = 0;
+    g_sensor[sensor_id]->pd->pwrm.elapsed_time = elapsed_time;
 }
+EXPORT_SYMBOL(ina231_i2c_disable_sensor);
+
+int64_t ina231_i2c_get_power_uW(int sensor_id)
+{
+    return  g_sensor[sensor_id]->pd->pwrm.sum_power / g_sensor[sensor_id]->pd->pwrm.count;
+}
+EXPORT_SYMBOL(ina231_i2c_get_power_uW);
 
 //[*]--------------------------------------------------------------------------------------------------[*]
 void    ina231_i2c_enable(struct ina231_sensor *sensor)
