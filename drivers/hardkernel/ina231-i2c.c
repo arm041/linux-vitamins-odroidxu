@@ -1,10 +1,10 @@
 //[*]--------------------------------------------------------------------------------------------------[*]
 //
 //
-// 
+//
 //  I2C INA231(Sensor) driver
 //  2013.07.17
-// 
+//
 //
 //[*]--------------------------------------------------------------------------------------------------[*]
 #include <linux/i2c.h>
@@ -40,14 +40,14 @@ static 	int  	        ina231_i2c_probe	(struct i2c_client *client, const struct 
 static 	void 	        ina231_work		    (struct work_struct *work);
 
 static enum hrtimer_restart ina231_timer    (struct hrtimer *timer);
-		
+
 //[*]--------------------------------------------------------------------------------------------------[*]
 #ifdef CONFIG_PM
 static int 	ina231_i2c_suspend(struct i2c_client *client, pm_message_t message)
 {
 	#ifdef CONFIG_HAS_EARLYSUSPEND
 		struct	ina231	*sensor = i2c_get_clientdata(client);
-	
+
 		sensor->pdata->suspend(&client->dev);
 	#endif
 
@@ -61,7 +61,7 @@ static int 	ina231_i2c_resume(struct i2c_client *client)
 		struct	ina231	*sensor = i2c_get_clientdata(client);
 
 		sensor->pdata->resume(&cliet->dev);
-	#endif	
+	#endif
 
 	return 0;
 }
@@ -77,7 +77,7 @@ int 	ina231_i2c_read(struct i2c_client *client, unsigned char cmd)
 {
 	struct i2c_msg	msg[2];
 	int 			ret;
-	
+
 	unsigned char   buf[2];
 
 	memset(msg, 0x00, sizeof(msg));
@@ -91,7 +91,7 @@ int 	ina231_i2c_read(struct i2c_client *client, unsigned char cmd)
 	msg[1].flags    = I2C_M_RD;
 	msg[1].len 		= 2;
 	msg[1].buf 		= &buf[0];
-	
+
 	if ((ret = i2c_transfer(client->adapter, msg, 2)) != 2) {
 		dev_err(&client->dev, "I2C read error: (%d) reg: 0x%X \n", ret, cmd);
 		return -EIO;
@@ -110,14 +110,14 @@ int 	ina231_i2c_write(struct i2c_client *client, unsigned char cmd, unsigned sho
 	memset(block_data, 0x00, sizeof(block_data));
 
     block_data[0] = cmd;
-    block_data[1] = (data >> 8) & 0xFF;	
-    block_data[2] = (data     ) & 0xFF;	
+    block_data[1] = (data >> 8) & 0xFF;
+    block_data[2] = (data     ) & 0xFF;
 
 	if ((ret = i2c_master_send(client, block_data, 3)) < 0) {
 		dev_err(&client->dev, "I2C write error: (%d) reg: 0x%X \n", ret, cmd);
 		return ret;
 	}
-	
+
 	return ret;
 }
 
@@ -187,6 +187,69 @@ int64_t ina231_i2c_get_power_uW(int sensor_id)
 }
 EXPORT_SYMBOL(ina231_i2c_get_power_uW);
 
+/* DONNY */
+int64_t ina231_i2c_get_current_power_uW(int sensor_id)
+{
+    struct ina231_sensor    *sensor = g_sensor[sensor_id];
+
+    if(sensor->pd->enable)  {
+        sensor->reg_bus_volt    = ina231_i2c_read(sensor->client, REG_BUS_VOLT   );
+        sensor->reg_current     = ina231_i2c_read(sensor->client, REG_CURRENT    );
+
+        mutex_lock(&sensor->mutex);
+        sensor->cur_uV = sensor->reg_bus_volt * FIX_uV_LSB;
+        sensor->cur_uA = sensor->reg_current * sensor->cur_lsb_uA;
+        sensor->cur_uW = (sensor->cur_uV / 1000 ) * (sensor->cur_uA / 1000);
+
+        if((sensor->cur_uV > sensor->max_uV) || (sensor->cur_uA > sensor->cur_uA))  {
+            sensor->max_uV = sensor->cur_uV;    sensor->max_uA = sensor->cur_uA;    sensor->max_uW = sensor->cur_uW;
+        }
+        mutex_unlock(&sensor->mutex);
+
+#if 1
+        {
+                // TODO: might have race condition
+                static int i = 0;
+                static int w = 0;
+
+                spin_lock(&spinlock);
+                w += sensor->cur_uW / 1000;
+                i++;
+                if (i == 4) {
+                        CLOVERTRACE_TIMESTAMP(USER_GRAPH_ID, 5, w);
+                        i = 0;
+                        w = 0;
+                }
+                spin_unlock(&spinlock);
+        }
+#else
+        {
+        int w;
+        w += sensor->cur_uW / 1000;
+        spin_lock(&spinlock);
+        if (strcmp(sensor->pd->name, "sensor_kfc") == 0) {
+                        CLOVERTRACE_TIMESTAMP(USER_GRAPH_ID, 0, w);
+        } else if (strcmp(sensor->pd->name, "sensor_arm") == 0) {
+                CLOVERTRACE_TIMESTAMP(USER_GRAPH_ID, 1, w);
+        } else if (strcmp(sensor->pd->name, "sensor_g3d") == 0) {
+                CLOVERTRACE_TIMESTAMP(USER_GRAPH_ID, 2, w);
+        } else if (strcmp(sensor->pd->name, "sensor_mem") == 0) {
+                CLOVERTRACE_TIMESTAMP(USER_GRAPH_ID, 3, w);
+        }
+        spin_unlock(&spinlock);
+        }
+#endif
+
+    }
+    else    {
+        sensor->cur_uV = 0; sensor->cur_uA = 0; sensor->cur_uW = 0;
+    }
+
+    return sensor->cur_uW;
+}
+EXPORT_SYMBOL(ina231_i2c_get_current_power_uW);
+/********/
+
 //[*]--------------------------------------------------------------------------------------------------[*]
 void    ina231_i2c_enable(struct ina231_sensor *sensor)
 {
@@ -201,12 +264,12 @@ static 	void 	ina231_work		(struct work_struct *work)
     if(sensor->pd->enable)  {
         sensor->reg_bus_volt    = ina231_i2c_read(sensor->client, REG_BUS_VOLT   );
         sensor->reg_current     = ina231_i2c_read(sensor->client, REG_CURRENT    );
-    
+
     	mutex_lock(&sensor->mutex);
         sensor->cur_uV = sensor->reg_bus_volt * FIX_uV_LSB;
         sensor->cur_uA = sensor->reg_current * sensor->cur_lsb_uA;
         sensor->cur_uW = (sensor->cur_uV / 1000 ) * (sensor->cur_uA / 1000);
-        
+
         if((sensor->cur_uV > sensor->max_uV) || (sensor->cur_uA > sensor->cur_uA))  {
             sensor->max_uV = sensor->cur_uV;    sensor->max_uA = sensor->cur_uA;    sensor->max_uW = sensor->cur_uW;
         }
@@ -252,7 +315,7 @@ static 	void 	ina231_work		(struct work_struct *work)
     else    {
         sensor->cur_uV = 0; sensor->cur_uA = 0; sensor->cur_uW = 0;
     }
-    
+
 
 //    printk("DS: pwr=%4d mW, 0x%04X 0x%04X\n",
 //    		sensor->cur_uW / 1000,
@@ -263,7 +326,7 @@ static 	void 	ina231_work		(struct work_struct *work)
     printk("%s : BUS Voltage = %06d uV, %1d.%06d V\n", sensor->pd->name, sensor->cur_uV, sensor->cur_uV/1000000, sensor->cur_uV%1000000);
     printk("%s : Curent      = %06d uA, %1d.%06d A\n", sensor->pd->name, sensor->cur_uA, sensor->cur_uA/1000000, sensor->cur_uA%1000000);
     printk("%s : Powert      = %06d uW, %1d.%06d W\n", sensor->pd->name, sensor->cur_uW, sensor->cur_uW/1000000, sensor->cur_uW%1000000);
-#endif    
+#endif
 }
 
 //[*]--------------------------------------------------------------------------------------------------[*]
@@ -272,9 +335,9 @@ static enum hrtimer_restart ina231_timer(struct hrtimer *timer)
 	struct ina231_sensor 	*sensor = container_of(timer, struct ina231_sensor, timer);
 
     queue_work(sensor->wq, &sensor->work);
-	
+
     if(sensor->pd->enable)  ina231_i2c_enable(sensor);
-	
+
 	return HRTIMER_NORESTART;
 }
 
@@ -293,16 +356,16 @@ static int  ina231_i2c_dt_parse(struct i2c_client *client, struct ina231_sensor 
 
 	if (of_property_read_string(sensor_np, "sensor-name", &sensor_name))    return  -1;
     sensor->pd->name = (unsigned char *)sensor_name;
-	
+
 	if (of_property_read_u32(sensor_np, "enable", &rdata))                  return  -1;
 	sensor->pd->enable = rdata;
-	
+
 	if (of_property_read_u32(sensor_np, "max_A", &rdata))                   return  -1;
 	sensor->pd->max_A = rdata;
-	
+
 	if (of_property_read_u32(sensor_np, "shunt_R_mohm", &rdata))            return  -1;
 	sensor->pd->shunt_R_mohm = rdata;
-	
+
 	if (of_property_read_u32(sensor_np, "config", &rdata))                  return  -1;
 	sensor->pd->config = rdata;
 
@@ -315,7 +378,7 @@ static int  ina231_i2c_dt_parse(struct i2c_client *client, struct ina231_sensor 
 	*/
 	sensor->pd->config = 0x45FF;	// roger
 //	sensor->pd->config = 0x45FB;	// roger
-	
+
 	if (of_property_read_u32(sensor_np, "update_period", &rdata))           return  -1;
 //	sensor->pd->update_period = rdata;
 	sensor->pd->update_period = 125000;//131904; // roger: overhead exists so set to higher frequency
@@ -342,7 +405,7 @@ static int 	ina231_i2c_probe(struct i2c_client *client, const struct i2c_device_
 		return	-ENOMEM;
 	}
 
-    // mutex init	
+    // mutex init
 	mutex_init(&sensor->mutex);
 
 	sensor->client	= client;
@@ -353,7 +416,7 @@ static int 	ina231_i2c_probe(struct i2c_client *client, const struct i2c_device_
     else    {
         sensor->pd = client->dev.platform_data;
     }
-	
+
 	i2c_set_clientdata(client, sensor);
 
     // Calculate current lsb value
@@ -366,7 +429,7 @@ static int 	ina231_i2c_probe(struct i2c_client *client, const struct i2c_device_
     if((rc = ina231_i2c_write(sensor->client, REG_ALERT_EN,    0x0000))  < 0)                   goto out;
 //    if((rc = ina231_i2c_write(sensor->client, REG_ALERT_EN,    0x0400))  < 0)                   goto out;	// roger
     if((rc = ina231_i2c_write(sensor->client, REG_ALERT_LIMIT, 0x0000))  < 0)                   goto out;
-    
+
     if((rc = ina231_i2c_read(sensor->client, REG_CONFIG      )) != sensor->pd->config      )    goto out;
     if((rc = ina231_i2c_read(sensor->client, REG_CALIBRATION )) != sensor->reg_calibration )    goto out;
     if((rc = ina231_i2c_read(sensor->client, REG_ALERT_EN    )) != 0x0000)                      goto out;
@@ -381,7 +444,7 @@ static int 	ina231_i2c_probe(struct i2c_client *client, const struct i2c_device_
     // timer run for sensor data receive
     INIT_WORK(&sensor->work, ina231_work);
     if((sensor->wq = create_singlethread_workqueue("ina231_wq")) == NULL)	goto out;
-        
+
     hrtimer_init(&sensor->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
     sensor->timer_sec  = sensor->pd->update_period / 1000000;
     sensor->timer_nsec = sensor->pd->update_period % 1000000;
@@ -401,7 +464,7 @@ static int 	ina231_i2c_probe(struct i2c_client *client, const struct i2c_device_
     dev_info(&client->dev, "Current LSB uA  : %d uA\n"  , sensor->cur_lsb_uA        );
     dev_info(&client->dev, "Conversion Time : %d us\n"  , sensor->pd->update_period );
     dev_info(&client->dev, "=====================================================\n");
-    
+
     // roger
     if (0 == strcmp(sensor->pd->name + 7, "arm")) {
     	g_sensor[0] = sensor;
@@ -414,7 +477,7 @@ static int 	ina231_i2c_probe(struct i2c_client *client, const struct i2c_device_
     }
     return  0;
 out:
-    dev_err(&client->dev, "============= Probe INA231 Fail! : %s (0x%04X) ============= \n", sensor->pd->name, rc); 
+    dev_err(&client->dev, "============= Probe INA231 Fail! : %s (0x%04X) ============= \n", sensor->pd->name, rc);
 
 	return rc;
 }
