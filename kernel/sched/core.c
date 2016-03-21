@@ -300,13 +300,13 @@ int sysctl_sched_rt_runtime = 950000;
 
 #ifdef CONFIG_HAS_SENSING_HOOKS
 
-static void (*_task_created_hook)(int cpu, struct task_struct *tsk) = 0;
+static int (*_task_created_hook)(struct task_struct *tsk, int at_cpu) = 0;
 static void (*_sensing_begin_hook)(int cpu, struct task_struct *tsk,int64_t time_given) = 0;
 static void (*_sensing_end_hook)(int cpu, struct task_struct *tsk, bool vcsw) = 0;
 static volatile bool sensing_hooks_set;
 
 void setup_sensing_hooks(
-            void (*task_created_hook)(int cpu, struct task_struct *tsk),
+            int (*task_created_hook)(struct task_struct *tsk, int at_cpu),
             void (*sensing_begin_hook)(int cpu, struct task_struct *tsk,int64_t time_given),
             void (*sensing_end_hook)(int cpu, struct task_struct *tsk, bool vcsw))
 {
@@ -326,9 +326,10 @@ void remove_sensing_hooks(void)
 }
 EXPORT_SYMBOL(remove_sensing_hooks);
 
-static inline void call_task_created_hook(int cpu, struct task_struct *tsk)
+static inline int call_task_created_hook(struct task_struct *tsk, int at_cpu)
 {
-    if(sensing_hooks_set) (*_task_created_hook)(cpu,tsk);
+    if(sensing_hooks_set) return (*_task_created_hook)(tsk,at_cpu);
+    else                  return at_cpu;
 }
 static inline void call_sensing_begin_hook(int cpu, struct task_struct *tsk)
 {
@@ -1780,11 +1781,6 @@ void sched_fork(struct task_struct *p)
 	set_task_cpu(p, cpu);
 	raw_spin_unlock_irqrestore(&p->pi_lock, flags);
 
-#ifdef CONFIG_HAS_SENSING_HOOKS
-	//initializes task hook_data and pin to this cpu
-	call_task_created_hook(cpu,p);
-#endif
-
 #if defined(CONFIG_SCHEDSTATS) || defined(CONFIG_TASK_DELAY_ACCT)
 	if (likely(sched_info_on()))
 		memset(&p->sched_info, 0, sizeof(p->sched_info));
@@ -1822,7 +1818,12 @@ void wake_up_new_task(struct task_struct *p)
 	 *  - cpus_allowed can change in the fork path
 	 *  - any previously selected cpu might disappear through hotplug
 	 */
+#ifdef CONFIG_HAS_SENSING_HOOKS
+    //initializes task hook_data and pin to the cpu returned by select_task_rq(p, SD_BALANCE_FORK, 0) or to a different cpu chosen by the callback
+    set_task_cpu(p, call_task_created_hook(p, select_task_rq(p, SD_BALANCE_FORK, 0)));
+#else
 	set_task_cpu(p, select_task_rq(p, SD_BALANCE_FORK, 0));
+#endif
 #endif
 
 	rq = __task_rq_lock(p);
