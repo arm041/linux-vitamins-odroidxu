@@ -301,13 +301,13 @@ int sysctl_sched_rt_runtime = 950000;
 #ifdef CONFIG_HAS_SENSING_HOOKS
 
 static int (*_task_created_hook)(struct task_struct *tsk, int at_cpu) = 0;
-static void (*_sensing_begin_hook)(int cpu, struct task_struct *tsk,int64_t time_given) = 0;
+static void (*_sensing_begin_hook)(int cpu, struct task_struct *tsk) = 0;
 static void (*_sensing_end_hook)(int cpu, struct task_struct *tsk, bool vcsw) = 0;
 static volatile bool sensing_hooks_set;
 
 void setup_sensing_hooks(
             int (*task_created_hook)(struct task_struct *tsk, int at_cpu),
-            void (*sensing_begin_hook)(int cpu, struct task_struct *tsk,int64_t time_given),
+            void (*sensing_begin_hook)(int cpu, struct task_struct *tsk),
             void (*sensing_end_hook)(int cpu, struct task_struct *tsk, bool vcsw))
 {
     _task_created_hook = task_created_hook;
@@ -333,7 +333,7 @@ static inline int call_task_created_hook(struct task_struct *tsk, int at_cpu)
 }
 static inline void call_sensing_begin_hook(int cpu, struct task_struct *tsk)
 {
-    if(sensing_hooks_set && tsk->sensing_hook_enabled) (*_sensing_begin_hook)(cpu,tsk,(tsk->sched_class->get_rr_interval)(cpu_rq(cpu),tsk));
+    if(sensing_hooks_set && tsk->sensing_hook_enabled) (*_sensing_begin_hook)(cpu,tsk);
 }
 static inline void call_sensing_end_hook(int cpu, struct task_struct *tsk, bool vcsw)
 {
@@ -3064,10 +3064,6 @@ need_resched:
 		switch_count = &prev->nvcsw;
 	}
 
-#ifdef CONFIG_HAS_SENSING_HOOKS
-	call_sensing_end_hook(cpu,prev,(switch_count==&(prev->nvcsw)));
-#endif
-
 	pre_schedule(rq, prev);
 
 	if (unlikely(!rq->nr_running))
@@ -3082,6 +3078,11 @@ need_resched:
 		rq->nr_switches++;
 		rq->curr = next;
 		++*switch_count;
+
+#ifdef CONFIG_HAS_SENSING_HOOKS
+		call_sensing_end_hook(cpu,prev,(switch_count==&(prev->nvcsw)));
+		call_sensing_begin_hook(cpu,next);
+#endif
 
 		context_switch(rq, prev, next); /* unlocks the rq */
 		/*
@@ -3101,10 +3102,6 @@ need_resched:
 	sched_preempt_enable_no_resched();
 	if (need_resched())
 		goto need_resched;
-
-#ifdef CONFIG_HAS_SENSING_HOOKS
-    call_sensing_begin_hook(cpu,rq->curr);
-#endif
 
 }
 
