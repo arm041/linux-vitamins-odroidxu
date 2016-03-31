@@ -183,7 +183,10 @@ EXPORT_SYMBOL(ina231_i2c_disable_sensor);
 
 int64_t ina231_i2c_get_power_uW(int sensor_id)
 {
-    return  g_sensor[sensor_id]->pd->pwrm.sum_power / g_sensor[sensor_id]->pd->pwrm.count;
+    if(g_sensor[sensor_id]->pd->pwrm.count == 0)
+    	return 0;
+    else
+    	return  g_sensor[sensor_id]->pd->pwrm.sum_power / g_sensor[sensor_id]->pd->pwrm.count;
 }
 EXPORT_SYMBOL(ina231_i2c_get_power_uW);
 
