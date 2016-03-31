@@ -333,11 +333,11 @@ static inline int call_task_created_hook(struct task_struct *tsk, int at_cpu)
 }
 static inline void call_sensing_begin_hook(int cpu, struct task_struct *tsk)
 {
-    if(sensing_hooks_set && tsk->sensing_hook_enabled) (*_sensing_begin_hook)(cpu,tsk);
+    if(sensing_hooks_set) (*_sensing_begin_hook)(cpu,tsk);
 }
 static inline void call_sensing_end_hook(int cpu, struct task_struct *tsk, bool vcsw)
 {
-    if(sensing_hooks_set && tsk->sensing_hook_enabled) (*_sensing_end_hook)(cpu,tsk,vcsw);
+    if(sensing_hooks_set) (*_sensing_end_hook)(cpu,tsk,vcsw);
 }
 
 #endif
