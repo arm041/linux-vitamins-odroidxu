@@ -185,8 +185,10 @@ int64_t ina231_i2c_get_power_uW(int sensor_id)
 {
     if(g_sensor[sensor_id]->pd->pwrm.count == 0)
     	return 0;
-    else
+    else {
+//        printk(KERN_ERR"PCNT[%d]=%d\n",sensor_id,g_sensor[sensor_id]->pd->pwrm.count);
     	return  g_sensor[sensor_id]->pd->pwrm.sum_power / g_sensor[sensor_id]->pd->pwrm.count;
+    }
 }
 EXPORT_SYMBOL(ina231_i2c_get_power_uW);
 
@@ -378,14 +380,17 @@ static int  ina231_i2c_dt_parse(struct i2c_client *client, struct ina231_sensor 
 	 * Vbus:  111: 8.244 ms
 	 *  Vsh:  111: 8.244 ms
 	 * Mode:  011: shunt, bus, triggered
+	 *
+	 * 0x4527: 0100 0101 0010 0111
 	*/
-	sensor->pd->config = 0x45FF;	// roger
-//	sensor->pd->config = 0x45FB;	// roger
+//	sensor->pd->config = 0x45FF;	// roger
+	sensor->pd->config = 0x4527;	// donny - 16 x 1.1ms
 
 	if (of_property_read_u32(sensor_np, "update_period", &rdata))           return  -1;
 //	sensor->pd->update_period = rdata;
-	sensor->pd->update_period = 125000;//131904; // roger: overhead exists so set to higher frequency
+//	sensor->pd->update_period = 125000;//131904; // roger: overhead exists so set to higher frequency
 //	sensor->pd->update_period = 10000;//131904; // roger: overhead exists so set to higher frequency
+	sensor->pd->update_period = 17600;//131904; // roger: overhead exists so set to higher frequency
 
     return  0;
 }
