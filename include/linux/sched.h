@@ -1058,9 +1058,6 @@ enum perf_event_task_context {
 	perf_nr_task_contexts,
 };
 
-//Lazy programmer should turn this into a actual config
-#define CONFIG_HAS_SENSING_HOOKS
-
 struct task_struct {
 	volatile long state;	/* -1 unrunnable, 0 runnable, >0 stopped */
 	void *stack;
@@ -1446,21 +1443,7 @@ struct task_struct {
 	unsigned int	sequential_io;
 	unsigned int	sequential_io_avg;
 #endif
-
-#ifdef CONFIG_HAS_SENSING_HOOKS
-	void *hook_data;
-	bool sensing_hook_enabled;
-#endif
 };
-
-#ifdef CONFIG_HAS_SENSING_HOOKS
-extern void setup_sensing_hooks(
-            int (*task_created_hook)(struct task_struct *tsk, int at_cpu),
-            void (*sensing_begin_hook)(int cpu, struct task_struct *tsk),
-            void (*sensing_end_hook)(int cpu, struct task_struct *tsk,bool vcsw));
-extern void remove_sensing_hooks(void);
-#endif
-
 
 /* Future-safe accessor for struct task_struct's cpus_allowed. */
 #define tsk_cpus_allowed(tsk) (&(tsk)->cpus_allowed)

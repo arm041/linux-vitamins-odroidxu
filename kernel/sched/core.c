@@ -298,51 +298,6 @@ __read_mostly int scheduler_running;
 int sysctl_sched_rt_runtime = 950000;
 
 
-#ifdef CONFIG_HAS_SENSING_HOOKS
-
-static int (*_task_created_hook)(struct task_struct *tsk, int at_cpu) = 0;
-static void (*_sensing_begin_hook)(int cpu, struct task_struct *tsk) = 0;
-static void (*_sensing_end_hook)(int cpu, struct task_struct *tsk, bool vcsw) = 0;
-static volatile bool sensing_hooks_set;
-
-void setup_sensing_hooks(
-            int (*task_created_hook)(struct task_struct *tsk, int at_cpu),
-            void (*sensing_begin_hook)(int cpu, struct task_struct *tsk),
-            void (*sensing_end_hook)(int cpu, struct task_struct *tsk, bool vcsw))
-{
-    _task_created_hook = task_created_hook;
-    _sensing_begin_hook = sensing_begin_hook;
-    _sensing_end_hook = sensing_end_hook;
-    smp_mb();
-    sensing_hooks_set = true;
-    smp_mb();
-}
-EXPORT_SYMBOL(setup_sensing_hooks);
-
-void remove_sensing_hooks(void)
-{
-    sensing_hooks_set = false;
-    smp_mb();
-}
-EXPORT_SYMBOL(remove_sensing_hooks);
-
-static inline int call_task_created_hook(struct task_struct *tsk, int at_cpu)
-{
-    if(sensing_hooks_set) return (*_task_created_hook)(tsk,at_cpu);
-    else                  return at_cpu;
-}
-static inline void call_sensing_begin_hook(int cpu, struct task_struct *tsk)
-{
-    if(sensing_hooks_set) (*_sensing_begin_hook)(cpu,tsk);
-}
-static inline void call_sensing_end_hook(int cpu, struct task_struct *tsk, bool vcsw)
-{
-    if(sensing_hooks_set) (*_sensing_end_hook)(cpu,tsk,vcsw);
-}
-
-#endif
-
-
 /*
  * __task_rq_lock - lock the rq @p resides on.
  */
@@ -1818,12 +1773,7 @@ void wake_up_new_task(struct task_struct *p)
 	 *  - cpus_allowed can change in the fork path
 	 *  - any previously selected cpu might disappear through hotplug
 	 */
-#ifdef CONFIG_HAS_SENSING_HOOKS
-    //initializes task hook_data and pin to the cpu returned by select_task_rq(p, SD_BALANCE_FORK, 0) or to a different cpu chosen by the callback
-    set_task_cpu(p, call_task_created_hook(p, select_task_rq(p, SD_BALANCE_FORK, 0)));
-#else
 	set_task_cpu(p, select_task_rq(p, SD_BALANCE_FORK, 0));
-#endif
 #endif
 
 	rq = __task_rq_lock(p);
@@ -3078,11 +3028,6 @@ need_resched:
 		rq->nr_switches++;
 		rq->curr = next;
 		++*switch_count;
-
-#ifdef CONFIG_HAS_SENSING_HOOKS
-		call_sensing_end_hook(cpu,prev,(switch_count==&(prev->nvcsw)));
-		call_sensing_begin_hook(cpu,next);
-#endif
 
 		context_switch(rq, prev, next); /* unlocks the rq */
 		/*
@@ -7167,11 +7112,6 @@ void __init sched_init(void)
 	idle_thread_set_boot_cpu();
 #endif
 	init_sched_fair_class();
-
-#ifdef CONFIG_HAS_SENSING_HOOKS
-	printk(KERN_INFO "sched_init(): sensing hooks allowed\n");
-	sensing_hooks_set = false;
-#endif
 
 	scheduler_running = 1;
 }
